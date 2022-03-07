@@ -10,6 +10,7 @@ module Meterpreter
 
 class CommandMapper
   @@cached_tlv_types = {}
+  @@tlv_cache_mutex = ::Rex::ReadWriteLock.new
 
   # Get the numeric command ID for the specified command name.
   #
@@ -108,25 +109,31 @@ class CommandMapper
   # @param Integer value The value of the TLV type to retrieve the TLV type names for.
   # @return [Array<Symbol>] An array of symbols of all TLV types that are defined with the value. Can be empty.
   def self.get_tlv_names(value)
-    return @@cached_tlv_types[value] unless @@cached_tlv_types[value].nil? || @@cached_tlv_types[value].empty?
-
-    # Default to arrays that contain TLV Types, so that we only deal with one data type
-    @@cached_tlv_types = Hash.new { |h, k| h[k] = [] }
-
-    available_modules = [
-      ::Rex::Post::Meterpreter,
-      *::Rex::Post::Meterpreter::ExtensionMapper.get_extension_klasses
-    ].uniq
-
-    available_modules.each do |mod|
-      mod.constants.each do |const|
-        next unless const.to_s.start_with?('TLV_TYPE_') || const.to_s.start_with?('PACKET_')
-
-        @@cached_tlv_types[mod.const_get(const)] << const
-      end
+    @@tlv_cache_mutex.synchronize_read do
+      return @@cached_tlv_types[value] unless @@cached_tlv_types[value].nil? || @@cached_tlv_types[value].empty?
     end
 
-    @@cached_tlv_types[value]
+    @@tlv_cache_mutex.synchronize_write do
+      return @@cached_tlv_types[value] unless @@cached_tlv_types[value].nil? || @@cached_tlv_types[value].empty?
+
+      # Default to arrays that contain TLV Types, so that we only deal with one data type
+      @@cached_tlv_types = Hash.new { |h, k| h[k] = Set.new }
+
+      available_modules = [
+        ::Rex::Post::Meterpreter,
+        *::Rex::Post::Meterpreter::ExtensionMapper.get_extension_klasses
+      ].uniq
+
+      available_modules.each do |mod|
+        mod.constants.each do |const|
+          next unless const.to_s.start_with?('TLV_TYPE_') || const.to_s.start_with?('PACKET_')
+
+          @@cached_tlv_types[mod.const_get(const)] << const
+        end
+      end
+
+      return @@cached_tlv_types[value]
+    end
   end
 end
 
